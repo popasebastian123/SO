@@ -165,3 +165,111 @@ static int require_manager_only(const Context *ctx, const char *op_name) {
   }
   return 1;
 }
+
+/* SYMLINKS */
+
+static void warn_if_dangling_symlink(const char *district) {
+  char linkname[PATH_MAX];
+  struct stat lst, st;
+
+  make_symlink_name(linkname, sizeof(linkname), district);
+
+  if (lstat(linkname, &lst) == -1) {
+    return; /* no link yet */
+  }
+
+  if (!S_ISLNK(lst.st_mode)) {
+    return;
+  }
+
+  if (stat(linkname, &st) == -1) {
+    fprintf(stderr, "Warning: dangling symlink detected: %s\n", linkname);
+  }
+}
+
+static int create_or_update_symlink(const char *district) {
+  char target[PATH_MAX];
+  char linkname[PATH_MAX];
+
+  snprintf(target, sizeof(target), "%s/%s", district, REPORTS_FILE);
+  make_symlink_name(linkname, sizeof(linkname), district);
+
+  unlink(linkname);
+  if (symlink(target, linkname) == -1) {
+    perror("symlink");
+    return 0;
+  }
+  return 1;
+}
+
+/* DISTRICT/FILE CREATION */
+
+static int ensure_district_exists(const Context *ctx, const char *district) {
+  struct stat st;
+  char path[PATH_MAX];
+  int fd;
+
+  if (stat(district, &st) == -1) {
+    if (!is_manager(ctx)) {
+      fprintf(stderr, "District '%s' does not exist. Only manager may initialize it.\n", district);
+      return 0;
+    }
+
+    if (mkdir(district, DISTRICT_MODE) == -1) {
+      perror("mkdir");
+      return 0;
+    }
+    chmod(district, DISTRICT_MODE);
+  }
+
+  make_path(path, sizeof(path), district, REPORTS_FILE);
+  if (stat(path, &st) == -1) {
+    fd = open(path, O_CREAT | O_RDWR, REPORTS_MODE);
+    if (fd == -1) {
+      perror("open reports.dat");
+      return 0;
+    }
+    close(fd);
+    chmod(path, REPORTS_MODE);
+  } else {
+    chmod(path, REPORTS_MODE);
+  }
+
+  make_path(path, sizeof(path), district, CFG_FILE);
+  if (stat(path, &st) == -1) {
+    fd = open(path, O_CREAT | O_RDWR | O_TRUNC, CFG_MODE);
+    if (fd == -1) {
+      perror("open district.cfg");
+      return 0;
+    }
+    if (write(fd, "threshold=2\n", 12) != 12) {
+      perror("write district.cfg");
+      close(fd);
+      return 0;
+    }
+    close(fd);
+    chmod(path, CFG_MODE);
+  } else {
+    chmod(path, CFG_MODE);
+  }
+
+  make_path(path, sizeof(path), district, LOG_FILE);
+  if (stat(path, &st) == -1) {
+    fd = open(path, O_CREAT | O_RDWR, LOG_MODE);
+    if (fd == -1) {
+      perror("open logged_district");
+      return 0;
+    }
+    close(fd);
+    chmod(path, LOG_MODE);
+  } else {
+    chmod(path, LOG_MODE);
+  }
+
+  if (!create_or_update_symlink(district)) {
+    return 0;
+  }
+
+  warn_if_dangling_symlink(district);
+  return 1;
+}
